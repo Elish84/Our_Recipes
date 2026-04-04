@@ -3,16 +3,31 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#064E3B" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Our Recipes" />
+    <link rel="apple-touch-icon" href="/Our_Recipes/icon-192.png" />
+    <link rel="manifest" href="/Our_Recipes/manifest.json" />
     <title>Our Recipes 🍲</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <!-- Main CSS -->
-    <script type="module" crossorigin src="/Our_Recipes/assets/index-DjiaEsRA.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/Our_Recipes/sw.js')
+            .then(reg => console.log('Service Worker registered', reg))
+            .catch(err => console.log('Service Worker registration failed', err));
+        });
+      }
+    </script>
+    <script type="module" crossorigin src="/Our_Recipes/assets/index-DWIFRxKm.js"></script>
     <link rel="modulepreload" crossorigin href="/Our_Recipes/assets/index.esm-C6A9Ppi0.js">
-    <link rel="stylesheet" crossorigin href="/Our_Recipes/assets/index-CzPOzaMO.css">
+    <link rel="stylesheet" crossorigin href="/Our_Recipes/assets/index-BmtjER72.css">
   </head>
   <body>
     <div id="root"></div>
