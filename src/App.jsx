@@ -1,14 +1,49 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
     auth, initAuth, signInWithGoogle, signOutUser, subscribeToRecipes, subscribeToStyles, subscribeToReviews,
     addRecipe, updateRecipe, deleteRecipe, addStyle, deleteStyle, addReview,
     subscribeToBooks, subscribeToMembers, subscribeToJoinRequests,
     createBook, requestToJoinBook, approveJoinRequest, rejectJoinRequest,
-    uploadRecipeImage, deleteBook, subscribeToUserRecipes, updateUserProfile, uploadProfileImage
+    uploadRecipeImage, deleteBook, subscribeToUserRecipes, updateUserProfile, uploadProfileImage,
+    subscribeToUserDoc, updateBookCover, toggleVisibility, getUserDoc,
+    removeMember, updateBookName, logInstallEvent, subscribeToInstallAnalytics
 } from "./services/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import AppHeader from "./components/AppHeader";
+import AnalyticsDashboard from "./components/AnalyticsDashboard";
 import headerBg from "./assets/header_bg.png";
+
+const AutoResizeTextarea = ({ value, onChange, placeholder, className, rows = 1 }) => {
+  const textareaRef = useRef(null);
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = (textareaRef.current.scrollHeight) + "px";
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      className={className}
+      rows={rows}
+      style={{ overflow: 'hidden', resize: 'none', minHeight: '44px' }}
+    />
+  );
+};
+
+const MemberName = ({ userId, initialName }) => {
+  const [name, setName] = useState(initialName || userId);
+  useEffect(() => {
+    if (!initialName || initialName === userId) {
+      getUserDoc(userId).then(u => { if (u) setName(u.name); });
+    }
+  }, [userId, initialName]);
+  return <strong>{name}</strong>;
+};
 
 // Translations
 const TRANSLATIONS = {
@@ -16,7 +51,7 @@ const TRANSLATIONS = {
     title: "המתכונים שלנו",
     explore: "מתכונים",
     newRecipe: "הוסף מתכון",
-    admin: "ניהול",
+    admin: "ניהול ספר",
     devGate: "שער מפתח",
     adminMode: "מצב מנהל פעיל ★",
     recipeTitle: "שם המתכון",
@@ -84,7 +119,7 @@ const TRANSLATIONS = {
     selectBook: "בחר ספר מתכונים להמשך",
     loading: "טוען...",
     searchPlaceholder: "חפש מתכון בספר זה...",
-    uploadImage: "בחר תמונה מהמכשיר",
+    uploadImage: "העלה תמונה",
     prepTime: "זמן הכנה (דקות)",
     difficulty: "רמת קושי",
     easy: "קל",
@@ -105,14 +140,41 @@ const TRANSLATIONS = {
     category: "קטגוריה",
     by: "מאת",
     editProfile: "ערוך פרופיל",
+    edit: "ערוך",
     changePhoto: "החלף תמונה",
-    stats: { recipes: "מתכונים", books: "ספרים" }
+    stats: { recipes: "מתכונים", books: "ספרים" },
+    copyRecipe: "העתק מתכון",
+    selectTargetBooks: "בחר ספרי יעד להעתקה",
+    copySuccess: "המתכון הועתק בהצלחה!",
+    copyError: "שגיאה בהעתקת המתכון",
+    addNewStyle: "הוסף סגנון חדש",
+    styleName: "שם הסגנון",
+    installApp: "הורד את האפליקציה למסך הבית",
+    installBtn: "התקן אפליקציה",
+    iosInstall: "לחץ על 'שתף' (Share) ואז על 'הוסף למסך הבית' (Add to Home Screen)",
+    shareWhatsApp: "שתף ב-WhatsApp",
+    shareSuccess: "המתכון עלה בהצלחה!",
+    addedBy: "הועלה על ידי:",
+    whatsappInviteTpl: "בואו להצטרף לספר המתכונים שלנו \"{{bookName}}\" 🥘:\n{{url}}",
+    whatsappRecipeTpl: "תראו איזה מתכון מעולה הוספתי לספר \"{{bookName}}\"! 🍳\n*{{recipeName}}*\n\nלצפייה בפרטים המלאים הקישו כאן:\n{{url}}",
+    removeMemberBtn: "הסר",
+    analytics: "אנליטיקס",
+    sysAnalyticsTitle: "מדדי התקנת האפליקציה",
+    totalInstalls: "סה\"כ התקנות",
+    installPrompts: "הצגת הנחיות התקנה",
+    conversionRate: "שיעור המרה",
+    installDismissed: "התקנות שנדחו",
+    funnel: "משפך המרה",
+    installClicked: "לחצו על התקנה",
+    installAccepted: "אישרו התקנה",
+    noAnalyticsAccess: "אין הרשאת גישה לנתוני אנליטיקס",
+    dailyInstalls: "התקנות יומיות"
   },
   en: {
     title: "Our Recipes",
     explore: "Recipes",
     newRecipe: "Add Recipe",
-    admin: "Admin",
+    admin: "Book Admin",
     devGate: "Dev Gate",
     adminMode: "Admin Mode Active ★",
     recipeTitle: "Recipe Title",
@@ -180,7 +242,7 @@ const TRANSLATIONS = {
     selectBook: "Select a recipe book to continue",
     loading: "Loading...",
     searchPlaceholder: "Search recipe in this book...",
-    uploadImage: "Choose image from device",
+    uploadImage: "Upload Image",
     prepTime: "Prep Time (min)",
     difficulty: "Difficulty",
     easy: "Easy",
@@ -201,8 +263,35 @@ const TRANSLATIONS = {
     category: "Category",
     by: "By",
     editProfile: "Edit Profile",
+    edit: "Edit",
     changePhoto: "Change Photo",
-    stats: { recipes: "Recipes", books: "Books" }
+    stats: { recipes: "Recipes", books: "Books" },
+    copyRecipe: "Copy Recipe",
+    selectTargetBooks: "Select Target Books",
+    copySuccess: "Recipe copied successfully!",
+    copyError: "Error copying recipe",
+    addNewStyle: "Add New Style",
+    styleName: "Style Name",
+    installApp: "Install App to Home Screen",
+    installBtn: "Install App",
+    iosInstall: "Tap 'Share' and then 'Add to Home Screen'",
+    shareWhatsApp: "Share via WhatsApp",
+    shareSuccess: "Recipe added successfully!",
+    addedBy: "Added by:",
+    whatsappInviteTpl: "Come join our shared cookbook \"{{bookName}}\" 🥘:\n{{url}}",
+    whatsappRecipeTpl: "Check out this amazing recipe I added to \"{{bookName}}\"! 🍳\n*{{recipeName}}*\n\nTap for the full instructions:\n{{url}}",
+    removeMemberBtn: "Remove",
+    analytics: "Analytics",
+    sysAnalyticsTitle: "App Installation Metrics",
+    totalInstalls: "Total Installs",
+    installPrompts: "Install Prompts Shown",
+    conversionRate: "Conversion Rate",
+    installDismissed: "Installs Dismissed",
+    funnel: "Conversion Funnel",
+    installClicked: "Install Clicked",
+    installAccepted: "Install Accepted",
+    noAnalyticsAccess: "No access to analytics data",
+    dailyInstalls: "Daily Installs"
   }
 };
 
@@ -264,19 +353,27 @@ const compressImage = (file) => {
       img.src = event.target.result;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 1024;
-        const scale = MAX_WIDTH / img.width;
-        canvas.width = MAX_WIDTH;
+        const MAX_WIDTH = 800;
+        const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
+        canvas.width = img.width * scale;
         canvas.height = img.height * scale;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.7)); // Quality 0.7
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
       };
       img.onerror = reject;
     };
     reader.onerror = reject;
   });
 };
+
+const StarRating = ({ rating }) => (
+  <div className="star-rating">
+    {[1, 2, 3, 4, 5].map(n => (
+      <span key={n} className={n <= rating ? "star-fill" : ""}>★</span>
+    ))}
+  </div>
+);
 
 const ReviewSection = ({ recipeId, t, user }) => {
   const [reviews, setReviews] = useState([]);
@@ -314,21 +411,114 @@ const ReviewSection = ({ recipeId, t, user }) => {
         </form>
       )}
       {reviews.sort((a,b) => b.createdAt - a.createdAt).map(rev => (
-        <div key={rev.id} className="review-card">
-          <div className="review-header"><strong>{"★".repeat(rev.rating)}</strong><span>{timeAgo(rev.createdAt, t)}</span></div>
-          <p>{rev.feedback}</p>
+        <div key={rev.id} className="review-card" style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.7)', borderRadius: 12, marginBottom: 12 }}>
+          <div className="review-header" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.8rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <img src={rev.userPhoto} style={{ width: 24, height: 24, borderRadius: '50%' }} alt={rev.userName} />
+              <strong>{rev.userName}</strong>
+            </div>
+            <span>{timeAgo(rev.createdAt, t)}</span>
+          </div>
+          <StarRating rating={rev.rating} />
+          <p style={{ marginTop: 6, fontSize: '0.95rem' }}>{rev.feedback}</p>
         </div>
       ))}
     </div>
   );
 };
 
-const ProfileView = ({ user, recipes, t, onUpdatePhoto, isSaving }) => {
+const CopyRecipeModal = ({ recipe, books, onCopy, onClose, t }) => {
+  const [selectedBooks, setSelectedBooks] = useState([]);
+
+  const toggleBook = (id) => {
+    setSelectedBooks(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  if (!recipe) return null;
+
+  return (
+    <div 
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div 
+        style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }} 
+        onClick={onClose}
+      />
+      <div 
+        className="admin-section" 
+        style={{ 
+          position: 'relative', 
+          zIndex: 2001, 
+          width: '100%', 
+          maxWidth: 420, 
+          background: 'white', 
+          borderRadius: 28, 
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+          overflow: 'hidden'
+        }}
+      >
+        <div style={{ padding: '24px 24px 16px', background: 'var(--header-gradient)', color: 'white' }}>
+          <h2 style={{ margin: 0, fontSize: '1.25rem' }}>{t.copyRecipe}</h2>
+          <div style={{ fontSize: '0.85rem', opacity: 0.9, marginTop: 4 }}>{recipe.name}</div>
+        </div>
+        
+        <div style={{ padding: '20px 24px' }}>
+          <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: 16 }}>{t.selectTargetBooks}</p>
+          <div style={{ maxHeight: '45vh', overflowY: 'auto' }}>
+            {books.map(b => (
+              <div 
+                key={b.id} 
+                className="recipe-admin-row" 
+                style={{ cursor: 'pointer', padding: '12px 0' }}
+                onClick={() => toggleBook(b.id)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ 
+                    width: 24, height: 24, borderRadius: 8, 
+                    border: '2px solid var(--primary)', 
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                    background: selectedBooks.includes(b.id) ? 'var(--primary)' : 'transparent',
+                    transition: 'all 0.2s'
+                  }}>
+                    {selectedBooks.includes(b.id) && <span style={{ color: 'white', fontSize: '14px' }}>✓</span>}
+                  </div>
+                  <span style={{ fontWeight: 600, fontSize: '1rem' }}>{b.name}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ padding: '0 24px 24px', display: 'flex', gap: 12 }}>
+          <button 
+            className="primary" 
+            onClick={() => onCopy(selectedBooks)} 
+            disabled={selectedBooks.length === 0}
+            style={{ flex: 2 }}
+          >
+            {t.copyRecipe}
+          </button>
+          <button 
+            className="primary" 
+            style={{ background: '#F3F4F6', color: '#4B5563', boxShadow: 'none', flex: 1 }} 
+            onClick={onClose}
+          >
+            {t.cancel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ProfileView = ({ user, userProfile, recipes, books, t, onUpdatePhoto, isSaving, onEdit, onCopyRecipe, lang }) => {
   return (
     <div className="profile-section" style={{ marginTop: 24 }}>
       <div className="profile-header">
         <div style={{ position: 'relative', display: 'inline-block' }}>
-          <img src={user.photoURL} className="profile-avatar-large" alt={user.displayName} />
+          <img src={userProfile?.photo || user.photoURL} className="profile-avatar-large" alt={user.displayName} />
           <label className="badge public" style={{ position: 'absolute', bottom: 20, right: 0, padding: '4px 8px', fontSize: '0.6rem', cursor: 'pointer' }}>
             ✎ {t.changePhoto}
             <input type="file" accept="image/*" hidden onChange={(e) => onUpdatePhoto(e.target.files[0])} />
@@ -337,27 +527,47 @@ const ProfileView = ({ user, recipes, t, onUpdatePhoto, isSaving }) => {
         <h2 style={{ fontSize: '1.5rem', marginBottom: 8 }}>{user.displayName || "User"}</h2>
         <div className="profile-stats">
           <div className="stat-item"><span className="stat-value">{recipes.length}</span><span className="stat-label">{t.stats.recipes}</span></div>
-          <div className="stat-item"><span className="stat-value">{new Set(recipes.map(r => r.bookId)).size}</span><span className="stat-label">{t.stats.books}</span></div>
+          <div className="stat-item"><span className="stat-value">{books.length}</span><span className="stat-label">{t.stats.books}</span></div>
         </div>
       </div>
       <h3 className="section-title" style={{ marginBottom: 20 }}>{t.myRecipes}</h3>
       <div className="recipe-list">
         {recipes.length === 0 ? <p className="empty-state">{t.emptyState}</p> : 
-         recipes.map(r => <RecipeCard key={r.id} recipe={r} styles={[]} isAdmin={true} t={t} />)}
+         recipes.map(r => (
+           <RecipeCard 
+             key={r.id} 
+             recipe={r} 
+             styles={[]} 
+             isAdmin={false} 
+             t={t} 
+             user={user} 
+             onEdit={onEdit} 
+             books={books}
+             onCopyRecipe={onCopyRecipe}
+             lang={lang}
+           />
+         ))}
       </div>
     </div>
   );
 };
 
-const RecipeCard = ({ recipe, styles, isAdmin, t }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
+const RecipeCard = ({ recipe, styles, isAdmin, t, user, onEdit, onOpenCopy, lang, forceExpanded }) => {
+  const [isExpanded, setIsExpanded] = useState(forceExpanded || false);
+  const cardRef = useRef(null);
+  useEffect(() => { 
+    if (forceExpanded) {
+      setIsExpanded(true);
+      if (cardRef.current) setTimeout(() => cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    }
+  }, [forceExpanded]);
   const [showAggregated, setShowAggregated] = useState(false);
   const recipeStyles = normalizeCookingStyles(recipe.styleIds || recipe.styleId);
   const recipeSteps = normalizeSteps(recipe, t);
   const totals = getAggregatedIngredients(recipeSteps);
 
   return (
-    <article className="recipe-card" onClick={() => setIsExpanded(!isExpanded)}>
+    <article className="recipe-card" ref={cardRef} onClick={() => setIsExpanded(!isExpanded)}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
         <div className="thumbnail-container">
           {recipe.mainImageUrl ? (
@@ -387,6 +597,18 @@ const RecipeCard = ({ recipe, styles, isAdmin, t }) => {
           {recipe.story && !isExpanded && <p className="recipe-story" style={{ marginTop: 6, fontSize: '0.8rem' }}>"{recipe.story.substring(0, 60)}..."</p>}
         </div>
       </div>
+
+      {!isExpanded && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
+          <button className="badge public" style={{ padding: '6px 12px', cursor: 'pointer', border: 'none', fontSize: '0.75rem', background: '#3B82F6', color: 'white' }} onClick={(e) => { e.stopPropagation(); onOpenCopy(recipe); }}>📋 {t.copyRecipe}</button>
+          {onEdit && (user && (recipe.createdByUid === user.uid || recipe.creatorUID === user.uid)) && (
+            <button className="badge public" style={{ padding: '6px 12px', cursor: 'pointer', border: 'none', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); onEdit(recipe); }}>✏️ {t.edit}</button>
+          )}
+          {onEdit && (user && (recipe.createdByUid === user.uid || recipe.creatorUID === user.uid)) && (
+            <button className="badge private" style={{ padding: '6px 12px', cursor: 'pointer', border: 'none', fontSize: '0.75rem' }} onClick={(e) => { e.stopPropagation(); if(window.confirm(t.delete)) deleteRecipe(recipe.id); }}>🗑️ {t.delete}</button>
+          )}
+        </div>
+      )}
 
       {isExpanded && (
         <div className="recipe-content" style={{ marginTop: 24, borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: 20 }}>
@@ -439,15 +661,18 @@ const RecipeCard = ({ recipe, styles, isAdmin, t }) => {
               {recipe.generalInstructions}
             </div>
           )}
-          <ReviewSection recipeId={recipeId} t={t} user={user} />
+          <ReviewSection recipeId={recipe.id} t={t} user={user} />
         </div>
       )}
     </article>
   );
 };
 
-const AdminDashboard = ({ recipes, styles, t, book, members, requests, onError }) => {
+const AdminDashboard = ({ recipes, styles, t, book, members, requests, onError, onUpdateCover }) => {
   const [newStyle, setNewStyle] = useState("");
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editingNameVal, setEditingNameVal] = useState(book?.name || "");
+
   const handleAddStyle = async (e) => {
     e.preventDefault();
     if (newStyle.trim()) { await addStyle(newStyle).catch(onError); setNewStyle(""); }
@@ -464,14 +689,48 @@ const AdminDashboard = ({ recipes, styles, t, book, members, requests, onError }
 
   return (
     <div className="admin-section">
+      <div className="admin-header-card" style={{ position: 'relative', marginBottom: 32, borderRadius: 24, overflow: 'hidden', height: 200 }}>
+        {book.coverImage ? (
+          <img src={book.coverImage} className="book-hero-bg" alt={book.name} />
+        ) : (
+          <div className="book-hero-bg-placeholder" />
+        )}
+        <label style={{ position: 'absolute', top: 16, right: 16, zIndex: 20, background: 'rgba(255,255,255,0.9)', padding: '10px', borderRadius: '50%', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.3)', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+          📷
+          <input type="file" accept="image/*" hidden onChange={(e) => { if(e.target.files[0]) onUpdateCover(e.target.files[0]); }} />
+        </label>
+        <div className="book-hero-overlay" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {isEditingName ? (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input 
+                  value={editingNameVal} 
+                  onChange={(e) => setEditingNameVal(e.target.value)} 
+                  style={{ background: 'rgba(255,255,255,0.9)', color: 'black', padding: '6px 12px', borderRadius: 12, border: 'none', fontWeight: 'bold' }} 
+                  autoFocus 
+                />
+                <button className="add-btn-small" style={{ minWidth: '40px', padding: '6px 12px' }} onClick={async () => {
+                  if (editingNameVal.trim() && editingNameVal !== book.name) {
+                    await updateBookName(book.id, editingNameVal).catch(onError);
+                  }
+                  setIsEditingName(false);
+                }}>V</button>
+            </div>
+          ) : (
+            <>
+              <h2 className="book-hero-title" style={{ margin: 0 }}>{book.name} - {t.admin}</h2>
+              <span onClick={() => setIsEditingName(true)} style={{ cursor: 'pointer', fontSize: '1.2rem', background: 'rgba(0,0,0,0.5)', padding: '6px', borderRadius: '50%' }}>✏️</span>
+            </>
+          )}
+        </div>
+      </div>
+
       <div style={{ marginBottom: 32, display: 'flex', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 className="section-title">{book.name} - {t.admin}</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="add-btn-small" style={{ background: '#25D366' }} onClick={() => {
             const link = `${window.location.origin}${window.location.pathname}?join=${book.id}`;
-            const text = encodeURIComponent(`הצטרפו לספר המתכונים שלנו "${book.name}": ${link}`);
-            window.open(`https://wa.me/?text=${text}`, '_blank');
-          }}>WhatsApp Share</button>
+            const text = t.whatsappInviteTpl.replace('{{bookName}}', book.name).replace('{{url}}', link);
+            window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+          }}>{t.shareWhatsApp}</button>
           <button className="add-btn-small" onClick={copyInviteLink}>{t.shareInvite}</button>
           <button className="add-btn-small" style={{ background: '#DC2626' }} onClick={async () => {
             if (window.confirm(t.confirmDeleteBook)) {
@@ -494,7 +753,7 @@ const AdminDashboard = ({ recipes, styles, t, book, members, requests, onError }
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="badge public" onClick={() => approveJoinRequest(req.id, book.id, req.requesterId).catch(onError)}>{t.approve}</button>
+              <button className="badge public" onClick={() => approveJoinRequest(req.id, book.id, req.requesterId, req.name).catch(onError)}>{t.approve}</button>
               <button className="badge private" onClick={() => rejectJoinRequest(req.id).catch(onError)}>{t.reject}</button>
             </div>
           </div>
@@ -503,8 +762,21 @@ const AdminDashboard = ({ recipes, styles, t, book, members, requests, onError }
         <h3 className="section-title" style={{ fontSize: '1rem', borderBottom: '2px solid', marginTop: 32 }}>{t.members} ({members.length})</h3>
         {members.map(m => (
           <div key={m.id} className="recipe-admin-row">
-            <span>{m.userId}</span>
-            <span className="badge public">{m.role}</span>
+            <MemberName userId={m.userId} initialName={m.userName} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span className="badge public">{m.role}</span>
+              {m.role !== "owner_admin" && (
+                <button 
+                  className="badge private" 
+                  style={{ cursor: 'pointer' }}
+                  onClick={async () => {
+                    if (window.confirm("האם אתה בטוח שברצונך להסיר חבר זה מהספר?")) {
+                      await removeMember(book.id, m.userId).catch(onError);
+                    }
+                  }}
+                >{t.removeMemberBtn || "Remove"}</button>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -564,8 +836,72 @@ export default function App() {
     steps: [{ title: "", ingredients: [], instructions: "" }] 
   });
   const [userRecipes, setUserRecipes] = useState([]);
+  const [userProfile, setUserProfile] = useState(null);
+  const [editingRecipe, setEditingRecipe] = useState(null);
+  const [recipeToCopy, setRecipeToCopy] = useState(null);
+  const [activeRecipeId, setActiveRecipeId] = useState(null);
+  const [showNewStyleInput, setShowNewStyleInput] = useState(false);
+  const [newStyleName, setNewStyleName] = useState("");
+  const [shareRecipe, setShareRecipe] = useState(null);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [showIOSPrompt, setShowIOSPrompt] = useState(false);
 
   const t = TRANSLATIONS[lang];
+
+  // PWA Install Logic Registration
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      const isInstalled = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+      if (!isInstalled && !localStorage.getItem('pwa_dismissed')) {
+        setShowInstallBanner(true);
+        logInstallEvent("install_prompt_shown", /android/i.test(navigator.userAgent) ? "android" : "desktop");
+      }
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    
+    // iOS Safari Detection
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isStandalone = window.navigator.standalone;
+    if (isIOS && !isStandalone && !localStorage.getItem('pwa_dismissed')) {
+      setShowIOSPrompt(true);
+      logInstallEvent("install_prompt_shown", "ios");
+    }
+    
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  // Main App Boot & Auth
+  useEffect(() => {
+    let unsubscribeBooks = () => { };
+    let unsubscribeAuth = () => { };
+
+    const boot = async () => {
+      await initAuth();
+      unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+        setUser(u);
+        setIsAuthLoading(false);
+        unsubscribeBooks();
+        if (u) {
+          unsubscribeBooks = subscribeToBooks(u.uid, (data) => {
+            setBooks(data);
+            if (data.length === 1 && !currentBook) setCurrentBook(data[0]);
+          });
+        } else {
+          setBooks([]);
+          setCurrentBook(null);
+          setAppError(null);
+        }
+      });
+    };
+    boot();
+    return () => {
+      unsubscribeBooks();
+      unsubscribeAuth();
+    };
+  }, []);
 
   // Access Repair for Legacy Books
   useEffect(() => {
@@ -577,12 +913,12 @@ export default function App() {
           const mRef = doc(db, "members", `${user.uid}_${currentBook.id}`);
           const snap = await getDoc(mRef);
           if (!snap.exists()) {
-            console.log("Repairing access for owner...");
             await setDoc(mRef, {
               userId: user.uid,
               bookId: currentBook.id,
               role: "owner_admin",
-              joinedAt: Date.now()
+              joinedAt: Date.now(),
+              userName: user.displayName || "Owner"
             });
           }
         } catch (e) { console.error("Repair failed:", e); }
@@ -591,43 +927,30 @@ export default function App() {
     }
   }, [currentBook, user]);
 
-    useEffect(() => {
-        let unsubscribeBooks = () => { };
-        let unsubscribeAuth = () => { };
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    const platform = /android/i.test(navigator.userAgent) ? "android" : "desktop";
+    logInstallEvent("install_clicked", platform);
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setShowInstallBanner(false);
+      logInstallEvent("install_accepted", platform);
+    }
+    setDeferredPrompt(null);
+  };
 
-        const boot = async () => {
-            await initAuth();
+  const dismissInstall = () => {
+    const platform = /iPad|iPhone|iPod/.test(navigator.userAgent) ? "ios" : (/android/i.test(navigator.userAgent) ? "android" : "desktop");
+    logInstallEvent("install_dismissed", platform);
+    setShowInstallBanner(false);
+    setShowIOSPrompt(false);
+    localStorage.setItem('pwa_dismissed', 'true');
+  };
 
-            unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-                setUser(u);
-                setIsAuthLoading(false);
-
-                unsubscribeBooks();
-
-                if (u) {
-                    unsubscribeBooks = subscribeToBooks(u.uid, (data) => {
-                        setBooks(data);
-                        if (data.length === 1 && !currentBook) setCurrentBook(data[0]);
-                    });
-                } else {
-                    setBooks([]);
-                    setCurrentBook(null);
-                    setAppError(null);
-                }
-            });
-        };
-
-        boot();
-
-        return () => {
-            unsubscribeBooks();
-            unsubscribeAuth();
-        };
-    }, []);
-
-  const handlePermError = (err) => {
-    if (err?.code === "permission-denied") setAppError("permission-denied");
-    else console.error(err);
+  const handlePermError = (err, isCritical = false) => {
+    if (err?.code === "permission-denied" && isCritical) setAppError("permission-denied");
+    else console.error("Permission error (non-critical):", err);
   };
 
   const isAdmin = members.find(m => m.userId === user?.uid)?.role.includes("admin");
@@ -635,21 +958,22 @@ export default function App() {
   useEffect(() => {
     if (!currentBook || !user) return;
     setAppError(null);
-    const unsubR = subscribeToRecipes(currentBook.id, setRecipes, handlePermError);
-    const unsubS = subscribeToStyles(setStyles, handlePermError);
-    const unsubM = subscribeToMembers(currentBook.id, setMembers, handlePermError);
+    const unsubR = subscribeToRecipes(currentBook.id, setRecipes, (e) => handlePermError(e, true));
+    const unsubS = subscribeToStyles(currentBook.id, setStyles, (e) => handlePermError(e, false));
+    const unsubM = subscribeToMembers(currentBook.id, setMembers, (e) => handlePermError(e, true));
     const unsubUR = subscribeToUserRecipes(user.uid, setUserRecipes);
-    let unsubReq = () => {};
-    if (isAdmin) {
-      unsubReq = subscribeToJoinRequests(currentBook.id, setRequests, handlePermError);
-    }
-    return () => { unsubR(); unsubS(); unsubM(); unsubReq(); unsubUR(); };
-  }, [currentBook, user, isAdmin]);
+    const unsubUP = subscribeToUserDoc(user.uid, setUserProfile);
+    const unsubReq = subscribeToJoinRequests(currentBook.id, setRequests);
+    return () => { unsubR(); unsubS(); unsubM(); unsubReq(); unsubUR(); unsubUP(); };
+  }, [currentBook, user]);
 
-  // Invite Logic
+  // Deep Links & Invite Logic
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const joinId = params.get("join");
+    const bookParam = params.get("book");
+    const recipeParam = params.get("recipe");
+
     if (joinId && user) {
       const alreadyIn = books.some(b => b.id === joinId);
       if (!alreadyIn && window.confirm(`${t.inviteTitle} ${t.requestJoin}?`)) {
@@ -658,7 +982,18 @@ export default function App() {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
-  }, [user, books, t]);
+
+    if (bookParam && user && books.length > 0) {
+      const targetBook = books.find(b => b.id === bookParam);
+      if (targetBook && (!currentBook || currentBook.id !== bookParam)) {
+        setCurrentBook(targetBook);
+      }
+      if (recipeParam && activeRecipeId !== recipeParam) {
+        setActiveRecipeId(recipeParam);
+        setActiveTab("home");
+      }
+    }
+  }, [user, books, currentBook, activeRecipeId, t]);
 
   const handleCreateBook = async (e) => {
     e.preventDefault();
@@ -684,13 +1019,23 @@ export default function App() {
       if (uploadFile) {
         finalImageUrl = await compressImage(uploadFile);
       }
-      await addRecipe({ ...formData, mainImageUrl: finalImageUrl }, currentBook.id, user);
+      if (editingRecipe) {
+        await updateRecipe(editingRecipe.id, { ...formData, mainImageUrl: finalImageUrl });
+      } else {
+        await addRecipe({ ...formData, mainImageUrl: finalImageUrl }, currentBook.id, user);
+        setShareRecipe({ 
+          name: formData.name, 
+          bookName: currentBook.name,
+          url: `${window.location.origin}${window.location.pathname}?book=${currentBook.id}`
+        });
+      }
       setFormData({ 
         name: "", story: "", mainImageUrl: "", styleIds: [], generalInstructions: "",
-        prepTime: 30, difficulty: "easy",
+        prepTime: 30, difficulty: "easy", category: "Main",
         steps: [{ title: "", ingredients: [], instructions: "" }] 
       });
       setUploadFile(null);
+      setEditingRecipe(null);
       setActiveTab("home");
     } catch (err) { handlePermError(err); } finally { setIsSaving(false); }
   };
@@ -718,12 +1063,91 @@ export default function App() {
     if (!file || !user) return;
     setIsSaving(true);
     try {
-      const url = await uploadProfileImage(file, user.uid);
-      const { updateProfile } = await import("firebase/auth");
-      await updateProfile(auth.currentUser, { photoURL: url });
-      await updateUserProfile(user.uid, { photo: url });
-      setUser({ ...auth.currentUser });
+      // Bypassing Auth photoURL limit and Storage CORS by only using Firestore
+      const base64Url = await compressImage(file);
+      await updateUserProfile(user.uid, { photo: base64Url });
     } catch(err) { handlePermError(err); } finally { setIsSaving(false); }
+  };
+
+  const handleUpdateBookCover = async (file) => {
+    if (!file || !currentBook) return;
+    try {
+      const base64Url = await compressImage(file);
+      await updateBookCover(currentBook.id, base64Url);
+      alert('תמונת הספר עודכנה בהצלחה!');
+    } catch(err) { 
+      console.error('Cover update error:', err);
+      alert('שגיאה בעדכון תמונה: ' + err.message);
+    }
+  };
+
+  const handleCopyRecipe = async (recipe, targetBookIds) => {
+    setIsSaving(true);
+    try {
+      const { getDocs, collection, query, where, addDoc } = await import("firebase/firestore");
+      const { db } = await import("./services/firebase");
+      for (const bookId of targetBookIds) {
+        const targetStylesSnap = await getDocs(query(collection(db, "styles"), where("bookId", "==", bookId)));
+        const targetStyles = targetStylesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        
+        const newStyleIds = [];
+        const originalStyleIds = recipe.styleIds || (recipe.styleId ? [recipe.styleId] : []);
+        
+        for (const legacyStyleId of originalStyleIds) {
+          const originalStyleName = styles.find(s => s.id === legacyStyleId)?.name;
+          if (!originalStyleName) continue;
+          
+          let matchedTargetStyle = targetStyles.find(ts => ts.name === originalStyleName);
+          if (!matchedTargetStyle) {
+            const addedRef = await addDoc(collection(db, "styles"), { name: originalStyleName, bookId, createdAt: Date.now() });
+            newStyleIds.push(addedRef.id);
+            targetStyles.push({ id: addedRef.id, name: originalStyleName }); 
+          } else {
+            newStyleIds.push(matchedTargetStyle.id);
+          }
+        }
+
+        const { id, createdAt, ...recipeData } = recipe; 
+        await addRecipe({
+          ...recipeData,
+          bookId,
+          styleIds: newStyleIds
+        }, bookId, user);
+      }
+      alert(t.copySuccess);
+    } catch (err) {
+      console.error(err);
+      alert(t.copyError);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAddNewStyle = async () => {
+    if (!newStyleName.trim() || !currentBook) return;
+    try {
+      await addStyle(newStyleName.trim(), currentBook.id);
+      setNewStyleName("");
+      setShowNewStyleInput(false);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleEditRecipe = (recipe) => {
+    setEditingRecipe(recipe);
+    setFormData({ 
+      name: recipe.name || "", 
+      story: recipe.story || "", 
+      mainImageUrl: recipe.mainImageUrl || "", 
+      styleIds: normalizeCookingStyles(recipe.styleIds || recipe.styleId || []),
+      generalInstructions: recipe.generalInstructions || "",
+      prepTime: recipe.prepTime || 30,
+      difficulty: recipe.difficulty || "easy",
+      category: recipe.category || "Main",
+      steps: normalizeSteps(recipe, t)
+    });
+    setActiveTab('add');
   };
 
   const groupedRecipes = filteredRecipes.reduce((acc, r) => {
@@ -751,7 +1175,18 @@ export default function App() {
       
       <nav className="header-toolbar">
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <img src={user.photoURL} alt={user.displayName} className="creator-avatar" style={{ width: 34, height: 34 }} />
+          <img 
+            src={userProfile?.photo || user.photoURL} 
+            alt={user.displayName} 
+            className="creator-avatar" 
+            style={{ width: 34, height: 34, cursor: 'pointer', border: activeTab === 'profile' ? '3px solid var(--primary)' : '3px solid transparent' }} 
+            onClick={() => setActiveTab('profile')}
+          />
+          {deferredPrompt && (
+            <button className="pwa-install-btn" onClick={handleInstall} title={t.installApp}>
+              📲 {t.installBtn}
+            </button>
+          )}
           <button className="lang-switcher" onClick={signOutUser} style={{ fontSize: '0.65rem' }}>{t.signOut}</button>
           <div className="lang-switcher" onClick={() => setLang(lang === "he" ? "en" : "he")}>{lang === "he" ? "EN" : "עב"}</div>
         </div>
@@ -776,7 +1211,6 @@ export default function App() {
                   📁 {uploadBookFile ? uploadBookFile.name : t.uploadImage}
                   <input type="file" accept="image/*" hidden onChange={(e) => setUploadBookFile(e.target.files[0])} />
                 </label>
-                <input style={{ marginTop: 8 }} value={newBookData.coverImage} onChange={(e) => setNewBookData({...newBookData, coverImage: e.target.value})} placeholder={t.imageUrl} />
               </div>
             </div>
             <div style={{ display: 'flex', gap: 12 }}>
@@ -793,10 +1227,10 @@ export default function App() {
           <p style={{ color: '#991B1B', marginBottom: 24 }}>{t.noAccessDetails}</p>
           <button className="primary" onClick={() => { setAppError(null); setCurrentBook(null); }}>{t.returnToBooks}</button>
         </div>
-      ) : !currentBook ? (
+      ) : (!currentBook && activeTab !== 'profile') ? (
         <div style={{ textAlign: 'center', padding: '60px 20px' }}>
           <h2 className="section-title" style={{ color: 'var(--text-muted)' }}>{t.selectBook}</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 24 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12, marginTop: 24 }}>
             {books.map(b => (
               <div key={b.id} className="recipe-card" style={{ cursor: 'pointer', padding: 16 }} onClick={() => setCurrentBook(b)}>
                 {b.coverImage ? (
@@ -814,50 +1248,152 @@ export default function App() {
         </div>
       ) : (
         <>
-          <div className="nav-tabs">
-            <div className={`nav-tab ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>{t.explore}</div>
-            <div className={`nav-tab ${activeTab === 'add' ? 'active' : ''}`} onClick={() => setActiveTab('add')}>{t.newRecipe}</div>
-            <div className={`nav-tab ${activeTab === 'profile' ? 'active' : ''}`} onClick={() => setActiveTab('profile')}>{t.profile}</div>
-            {isAdmin && <div className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`} onClick={() => setActiveTab('admin')}>{t.admin}</div>}
-          </div>
+          {currentBook && (
+            <>
+              <div className="nav-tabs">
+                <div 
+                  className={`nav-tab ${activeTab === 'home' ? 'active' : ''}`} 
+                  onClick={() => { setActiveTab('home'); setEditingRecipe(null); }}
+                >
+                  {t.explore}
+                </div>
+                {isAdmin && (
+                  <div 
+                    className={`nav-tab ${activeTab === 'admin' ? 'active' : ''}`} 
+                    onClick={() => { setActiveTab('admin'); setEditingRecipe(null); }}
+                  >
+                    {t.admin}
+                    {requests.length > 0 && <span className="badge-count" style={{ top: -8, left: -10 }}>{requests.length}</span>}
+                  </div>
+                )}
+                <div 
+                  className={`nav-tab ${activeTab === 'add' || editingRecipe ? 'active' : ''}`} 
+                  onClick={() => setActiveTab('add')}
+                >
+                  {editingRecipe ? t.edit : t.newRecipe}
+                </div>
+                <div 
+                  className={`nav-tab ${activeTab === 'profile' ? 'active' : ''}`} 
+                  onClick={() => { setActiveTab('profile'); setEditingRecipe(null); }}
+                >
+                  {t.profile}
+                </div>
+                {userProfile?.role === 'manager' && (
+                  <div 
+                    className={`nav-tab ${activeTab === 'analytics' ? 'active' : ''}`} 
+                    onClick={() => { setActiveTab('analytics'); setEditingRecipe(null); }}
+                  >
+                    📈 {t.analytics}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
-          <div className="book-hero-header">
-            {currentBook.coverImage ? (
-              <img src={currentBook.coverImage} className="book-hero-bg" alt={currentBook.name} />
-            ) : (
-              <div className="book-hero-bg-placeholder" />
-            )}
-            <div className="book-hero-overlay">
-              <h2 className="book-hero-title">{currentBook.name}</h2>
+          {(activeTab !== 'home' || editingRecipe) && (
+            <button className="back-btn" onClick={() => { setActiveTab('home'); setEditingRecipe(null); }}>
+              {lang === 'he' ? '→ חזרה לבית' : '← Back to Home'}
+            </button>
+          )}
+
+          {showInstallBanner && (
+            <div className="install-banner">
+              <div style={{ flex: 1 }}>
+                <strong style={{ display: 'block', fontSize: '1rem', color: 'var(--primary-dark)' }}>{t.title}</strong>
+                <span style={{ fontSize: '0.85rem', color: '#666' }}>{t.installApp}</span>
+              </div>
+              <button className="primary" style={{ width: 'auto', padding: '8px 16px', fontSize: '0.85rem' }} onClick={handleInstall}>{t.installBtn}</button>
+              <button onClick={dismissInstall} style={{ background: 'none', border: 'none', fontSize: '1.2rem', padding: 4, cursor: 'pointer', opacity: 0.5 }}>×</button>
             </div>
-          </div>
+          )}
+
+          {showIOSPrompt && (
+            <div className="install-banner" style={{ background: '#F0F9FF', border: '1px solid #BAE6FD' }}>
+              <div style={{ flex: 1 }}>
+                <strong style={{ display: 'block', fontSize: '0.9rem', color: '#0369A1' }}>{t.installBtn} (iPhone)</strong>
+                <span style={{ fontSize: '0.8rem', color: '#0C4A6E' }}>{t.iosInstall}</span>
+              </div>
+              <button onClick={dismissInstall} style={{ color: '#0369A1', background: 'none', border: 'none', fontSize: '1.1rem', fontWeight: 'bold' }}>OK</button>
+            </div>
+          )}
+
+          {shareRecipe && (
+            <div className="admin-section" style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 3000, width: '90%', maxWidth: 400, textAlign: 'center', boxShadow: '0 0 0 1000px rgba(0,0,0,0.5)' }}>
+              <h2 className="section-title">{t.shareSuccess}</h2>
+              <p style={{ marginBottom: 24 }}>{shareRecipe.name}</p>
+              <button 
+                className="primary" 
+                style={{ background: '#25D366', marginBottom: 12 }}
+                onClick={() => {
+                  const link = shareRecipe.url;
+                  const text = t.whatsappRecipeTpl.replace('{{bookName}}', shareRecipe.bookName).replace('{{recipeName}}', shareRecipe.name).replace('{{url}}', link);
+                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+                  setShareRecipe(null);
+                }}
+              >
+                {t.shareWhatsApp}
+              </button>
+              <button className="primary" style={{ background: '#666' }} onClick={() => setShareRecipe(null)}>{t.cancel}</button>
+            </div>
+          )}
+
+          {currentBook && (
+            <div className="book-hero-header">
+              {currentBook.coverImage ? (
+                <img src={currentBook.coverImage} className="book-hero-bg" alt={currentBook.name} />
+              ) : (
+                <div className="book-hero-bg-placeholder" />
+              )}
+              <div className="book-hero-overlay">
+                <h2 className="book-hero-title">{currentBook.name}</h2>
+              </div>
+            </div>
+          )}
 
           {activeTab === 'home' && (
             <>
-              <div style={{ padding: '0 4px', marginBottom: 20 }}>
+              <div style={{ display: 'flex', gap: 8, padding: '0 4px', marginBottom: 20 }}>
                 <input 
                   className="search-input"
                   placeholder={t.searchPlaceholder} 
                   value={searchTerm} 
                   onChange={(e) => setSearchTerm(e.target.value)} 
-                  style={{ width: '100%', padding: '12px 16px', borderRadius: 16, border: '1px solid rgba(0,0,0,0.1)', background: 'rgba(255,255,255,0.5)' }}
+                  style={{ flex: 1, padding: '12px 16px', borderRadius: 16, border: '1px solid rgba(0,0,0,0.1)', background: 'rgba(255,255,255,0.9)', minWidth: 0, fontSize: '0.95rem' }}
                 />
+                <select 
+                  value={filterStyles.length > 0 ? filterStyles[0] : ""}
+                  onChange={(e) => setFilterStyles(e.target.value ? [e.target.value] : [])}
+                  style={{ flex: '0 0 auto', maxWidth: '35%', padding: '0 12px', borderRadius: 16, border: '1px solid rgba(0,0,0,0.1)', background: 'rgba(255,255,255,0.9)', fontSize: '0.9rem', outline: 'none' }}
+                >
+                  <option value="">{t.category}</option>
+                  {styles.map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
               </div>
-              <div className="filter-bar" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 24, padding: '0 4px' }}>
-                {styles.map(s => (
-                  <span key={s.id} onClick={() => setFilterStyles(prev => prev.includes(s.id)?prev.filter(x=>x!==s.id):[...prev,s.id])} 
-                    className={`badge ${filterStyles.includes(s.id) ? 'public' : ''}`} style={{ cursor: 'pointer', background: filterStyles.includes(s.id) ? '' : '#EEE', color: filterStyles.includes(s.id) ? '' : '#666', padding: '6px 12px' }}>
-                    {s.name}
-                  </span>
-                ))}
-                {(filterStyles.length > 0 || searchTerm) && <span onClick={() => {setFilterStyles([]); setSearchTerm("");}} style={{ cursor: 'pointer', padding: '6px 12px', fontSize: '0.8rem', color: '#DC2626' }}>{t.clearAll}</span>}
-              </div>
+              {(filterStyles.length > 0 || searchTerm) && (
+                <div style={{ padding: '0 4px', marginBottom: 24, display: 'flex', justifyContent: 'flex-start' }}>
+                    <span onClick={() => {setFilterStyles([]); setSearchTerm("");}} style={{ cursor: 'pointer', padding: '6px 12px', fontSize: '0.8rem', color: '#DC2626', background: '#FEE2E2', borderRadius: 12 }}>{t.clearAll}</span>
+                </div>
+              )}
               <div className="recipe-list">
                 {filteredRecipes.length === 0 ? <p className="empty-state">{(filterStyles.length > 0 || searchTerm) ? t.noMatch : t.emptyState}</p> : 
                   Object.keys(groupedRecipes).sort().map(cat => (
                     <div key={cat} className="category-group">
                       <h3 className="category-title">{t.categories[cat] || cat}</h3>
-                      {groupedRecipes[cat].map(r => <RecipeCard key={r.id} recipe={r} styles={styles} isAdmin={isAdmin} t={t} />)}
+                      {groupedRecipes[cat].map(r => (
+                  <RecipeCard 
+                    key={r.id} 
+                    recipe={r} 
+                    styles={styles} 
+                    isAdmin={isAdmin} 
+                    t={t} 
+                    user={user} 
+                    onOpenCopy={setRecipeToCopy} 
+                    lang={lang} 
+                    forceExpanded={r.id === activeRecipeId}
+                  />
+                ))}
                     </div>
                   ))
                 }
@@ -866,7 +1402,22 @@ export default function App() {
           )}
 
           {activeTab === 'profile' && (
-            <ProfileView user={user} recipes={userRecipes} t={t} onUpdatePhoto={handleUpdatePhoto} isSaving={isSaving} />
+            <ProfileView 
+              user={user} 
+              userProfile={userProfile} 
+              recipes={userRecipes} 
+              books={books} 
+              t={t} 
+              onUpdatePhoto={handleUpdatePhoto} 
+              isSaving={isSaving} 
+              onEdit={handleEditRecipe} 
+              onOpenCopy={setRecipeToCopy}
+              lang={lang} 
+            />
+          )}
+
+          {activeTab === 'analytics' && userProfile?.role === 'manager' && (
+            <AnalyticsDashboard t={t} />
           )}
 
           {activeTab === 'add' && (
@@ -882,7 +1433,19 @@ export default function App() {
                       {s.name}
                     </span>
                   ))}
+                  <button type="button" className="add-btn-small" style={{ borderRadius: 12, padding: '8px 14px', fontSize: '1.2rem', height: 'auto', minWidth: '40px' }} onClick={() => setShowNewStyleInput(!showNewStyleInput)}>+</button>
                 </div>
+                {showNewStyleInput && (
+                  <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                    <input 
+                      value={newStyleName} 
+                      onChange={(e) => setNewStyleName(e.target.value)} 
+                      placeholder={t.newStyle}
+                      style={{ flex: 1, background: 'white' }}
+                    />
+                    <button type="button" className="primary" style={{ width: 'auto', padding: '0 16px' }} onClick={handleAddNewStyle}>{t.add}</button>
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div className="form-group" style={{ flex: 1 }}><label>{t.prepTime}</label>
@@ -902,9 +1465,6 @@ export default function App() {
                     📁 {uploadFile ? uploadFile.name : t.uploadImage}
                     <input type="file" accept="image/*" hidden onChange={(e) => setUploadFile(e.target.files[0])} />
                   </label>
-                  <div style={{ marginTop: 12 }}>
-                    <input value={formData.mainImageUrl} onChange={(e) => setFormData({...formData, mainImageUrl: e.target.value})} placeholder={t.imageUrl} />
-                  </div>
                   <input style={{ marginTop: 12 }} value={formData.story} onChange={(e) => setFormData({...formData, story: e.target.value})} placeholder={t.story} />
                 </div>
               </div>
@@ -941,7 +1501,7 @@ export default function App() {
                     </div>
                     <div className="form-group">
                       <label>{t.stepInstructions}</label>
-                      <textarea rows="2" value={step.instructions} onChange={(e) => updateStep(sIdx, 'instructions', e.target.value)} placeholder={t.stepInstructions} />
+                      <AutoResizeTextarea value={step.instructions} onChange={(e) => updateStep(sIdx, 'instructions', e.target.value)} placeholder={t.stepInstructions} />
                     </div>
                   </div>
                 ))}
@@ -949,17 +1509,37 @@ export default function App() {
               </div>
               <div className="form-group">
                 <label>{t.generalInstructions}</label>
-                <textarea value={formData.generalInstructions} onChange={(e) => setFormData({...formData, generalInstructions: e.target.value})} rows="3" placeholder={t.generalInstructions} />
+                <AutoResizeTextarea value={formData.generalInstructions} onChange={(e) => setFormData({...formData, generalInstructions: e.target.value})} placeholder={t.generalInstructions} />
               </div>
-              <button className="primary" type="submit" disabled={isSaving || formData.styleIds.length === 0}>{isSaving ? t.saving : t.publish}</button>
+              <button className="primary" type="submit" disabled={isSaving || formData.styleIds.length === 0}>{isSaving ? t.saving : (editingRecipe ? t.submit : t.publish)}</button>
+              {editingRecipe && <button type="button" className="primary" style={{ background: '#666', marginTop: 12 }} onClick={() => { setEditingRecipe(null); setActiveTab('home'); }}>{t.cancel}</button>}
             </form>
           )}
 
           {activeTab === 'admin' && isAdmin && (
-            <AdminDashboard recipes={recipes} styles={styles} t={t} book={currentBook} members={members} requests={requests} onError={handlePermError} />
+            <AdminDashboard 
+              recipes={recipes} 
+              styles={styles} t={t} 
+              book={currentBook} 
+              members={members} 
+              requests={requests} 
+              onError={handlePermError}
+              onUpdateCover={handleUpdateBookCover}
+            />
           )}
         </>
       )}
+
+      <CopyRecipeModal 
+        recipe={recipeToCopy}
+        books={books.filter(b => b.id !== recipeToCopy?.bookId)}
+        t={t}
+        onClose={() => setRecipeToCopy(null)}
+        onCopy={(targetIds) => {
+          handleCopyRecipe(recipeToCopy, targetIds);
+          setRecipeToCopy(null);
+        }}
+      />
     </div>
   );
 }

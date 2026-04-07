@@ -1,4 +1,4 @@
-﻿import { initializeApp } from "firebase/app";
+import { initializeApp } from "firebase/app";
 import {
     getFirestore,
     collection,
@@ -9,11 +9,10 @@ import {
     onSnapshot,
     query,
     orderBy,
-    where,
-    limit,
     setDoc,
     getDoc,
-    getDocs
+    getDocs,
+    or
 } from "firebase/firestore";
 import {
     getAuth,
@@ -102,16 +101,19 @@ export const subscribeToBooks = (userId, callback) => {
     return onSnapshot(q, async (snapshot) => {
         const bookIds = snapshot.docs.map(d => d.data().bookId);
         if (bookIds.length === 0) return callback([]);
-        const books = [];
-        for (const bid of bookIds) {
-            try {
-                const bDoc = await getDoc(doc(db, "recipeBooks", bid));
-                if (bDoc.exists()) books.push({ id: bid, ...bDoc.data() });
-            } catch (err) {
-                console.warn(`Access denied or error fetching book ${bid}`, err);
-            }
+        
+        const chunks = [];
+        for (let i = 0; i < bookIds.length; i += 30) {
+            chunks.push(bookIds.slice(i, i + 30));
         }
-        callback(books);
+
+        const allBooks = [];
+        for (const chunk of chunks) {
+            const bQuery = query(booksCollection, where("__name__", "in", chunk));
+            const bSnap = await getDocs(bQuery);
+            allBooks.push(...bSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        }
+        callback(allBooks);
     }, (error) => console.error("Error in books subscription:", error));
 };
 
@@ -132,19 +134,28 @@ export const subscribeToMembers = (bookId, callback, onError) => {
 };
 
 export const addRecipe = async (recipe, bookId, user) => {
-    await addDoc(recipesCollection, {
+    const docRef = await addDoc(recipesCollection, {
         ...recipe,
         bookId,
-        creatorUID: user.uid,
+        createdByUid: user.uid,
         creatorName: user.displayName || "Unknown",
         creatorPhoto: user.photoURL || "",
         visibility: recipe.visibility || "public",
         createdAt: Date.now()
     });
+    return docRef.id;
 };
 
 export const updateRecipe = async (recipeId, updates) => {
     const recipeRef = doc(db, "recipes", recipeId);
+    // Auto-migrate legacy creatorUID if not yet updated to createdByUid
+    const snap = await getDoc(recipeRef);
+    if (snap.exists()) {
+        const data = snap.data();
+        if (!data.createdByUid && data.creatorUID) {
+            updates.createdByUid = data.creatorUID;
+        }
+    }
     await updateDoc(recipeRef, updates);
 };
 
@@ -154,6 +165,9 @@ export const deleteRecipe = async (recipeId) => {
 };
 
 export const createBook = async (name, coverImage, userId) => {
+    const userDoc = await getDoc(doc(db, "users", userId));
+    const userName = userDoc.exists() ? userDoc.data().name : "Owner";
+    
     const bRef = await addDoc(booksCollection, {
         name,
         coverImage,
@@ -163,6 +177,7 @@ export const createBook = async (name, coverImage, userId) => {
     await setDoc(doc(db, "members", `${userId}_${bRef.id}`), {
         bookId: bRef.id,
         userId,
+        userName,
         role: "owner_admin",
         joinedAt: Date.now()
     });
@@ -186,10 +201,10 @@ export const requestToJoinBook = async (bookId, userId, name, email, photo) => {
     });
 };
 
-export const approveJoinRequest = async (requestId, bookId, userId) => {
+export const approveJoinRequest = async (requestId, bookId, userId, name) => {
     await updateDoc(doc(db, "joinRequests", requestId), { status: "approved" });
     await setDoc(doc(db, "members", `${userId}_${bookId}`), {
-        bookId, userId, role: "member", joinedAt: Date.now()
+        bookId, userId, role: "member", joinedAt: Date.now(), userName: name || "Member"
     });
 };
 
@@ -198,7 +213,11 @@ export const rejectJoinRequest = async (requestId) => {
 };
 
 export const subscribeToUserRecipes = (uid, callback) => {
-    const q = query(recipesCollection, where("creatorUID", "==", uid), orderBy("createdAt", "desc"));
+    // Support both new and legacy owner fields
+    const q = query(recipesCollection, or(
+        where("createdByUid", "==", uid),
+        where("creatorUID", "==", uid)
+    ));
     return onSnapshot(q, (snapshot) => {
         callback(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
@@ -208,10 +227,40 @@ export const updateUserProfile = async (uid, updates) => {
     await updateDoc(doc(db, "users", uid), updates);
 };
 
-export const subscribeToStyles = (callback, onError) => {
+export const subscribeToUserDoc = (uid, callback) => {
+    if (!uid) return () => { };
+    return onSnapshot(doc(db, "users", uid), (snapshot) => {
+        if (snapshot.exists()) callback(snapshot.data());
+    });
+};
+
+export const getUserDoc = async (uid) => {
+    const snap = await getDoc(doc(db, "users", uid));
+    return snap.exists() ? snap.data() : null;
+};
+
+export const toggleVisibility = async (recipeId, currentVisibility) => {
+    const next = currentVisibility === "public" ? "hidden" : "public";
+    await updateDoc(doc(db, "recipes", recipeId), { visibility: next });
+};
+
+export const updateBookCover = async (bookId, coverImage) => {
+    await updateDoc(doc(db, "recipeBooks", bookId), { coverImage });
+};
+
+export const updateBookName = async (bookId, name) => {
+    await updateDoc(doc(db, "recipeBooks", bookId), { name });
+};
+
+export const removeMember = async (bookId, userId) => {
+    await deleteDoc(doc(db, "members", `${userId}_${bookId}`));
+};
+
+export const subscribeToStyles = (bookId, callback, onError) => {
     const q = query(stylesCollection, orderBy("createdAt", "desc"));
     return onSnapshot(q, (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+            .filter(s => !s.bookId || s.bookId === bookId);
         callback(data);
     }, (error) => { if (onError) onError(error); });
 };
@@ -225,8 +274,8 @@ export const subscribeToReviews = (recipeId, callback, onError) => {
     }, (error) => { if (onError) onError(error); });
 };
 
-export const addStyle = async (name) => {
-    await addDoc(stylesCollection, { name, createdAt: Date.now() });
+export const addStyle = async (name, bookId) => {
+    await addDoc(stylesCollection, { name, bookId, createdAt: Date.now() });
 };
 
 export const deleteStyle = async (styleId) => {
@@ -240,7 +289,7 @@ export const addReview = async (recipeId, review, user) => {
         ...review,
         userName: user.displayName || "GUEST",
         userPhoto: user.photoURL || "",
-        creatorUID: user.uid,
+        createdByUid: user.uid,
         createdAt: Date.now()
     });
 };
@@ -257,4 +306,26 @@ export const uploadProfileImage = async (file, uid) => {
     const storageRef = ref(storage, "users/" + uid + "/profile_" + Date.now() + ".jpg");
     const snapshot = await uploadBytes(storageRef, file);
     return await getDownloadURL(snapshot.ref);
+};
+
+export const logInstallEvent = async (eventType, platform) => {
+    try {
+        const analyticsCol = collection(db, "installAnalytics");
+        await addDoc(analyticsCol, {
+            eventType,
+            platform,
+            timestamp: Date.now()
+        });
+    } catch (e) {
+        console.error("Analytics log failed: ", e);
+    }
+};
+
+export const subscribeToInstallAnalytics = (callback, onError) => {
+    const analyticsCol = collection(db, "installAnalytics");
+    const q = query(analyticsCol, limit(5000)); // Cap for safety
+    return onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        callback(data);
+    }, (error) => { if (onError) onError(error); });
 };
